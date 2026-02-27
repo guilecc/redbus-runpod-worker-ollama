@@ -5,7 +5,7 @@
 Start a runpod serverless with the docker container ``svenbrnn/runpod-ollama:latest``. Set ``OLLAMA_MODEL_NAME`` environment to a model from ollama.com to automatically download a model.
 A mounted volume will be automatically used.
 
-[![RunPod](https://api.runpod.io/badge/SvenBrnn/runpod-worker-ollama)](https://www.runpod.io/console/hub/SvenBrnn/runpod-worker-ollama)
+[![Runpod](https://api.runpod.io/badge/guilecc/redbus-runpod-worker-ollama)](https://console.runpod.io/hub/guilecc/redbus-runpod-worker-ollama)
 
 ## Environment variables
 
