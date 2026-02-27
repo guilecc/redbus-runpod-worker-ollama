@@ -1,6 +1,6 @@
 {
-  "title": "Runpod Worker Ollama",
-  "description": "A serverless Ollama Worker for Runpod",
+  "title": "Redbus RunPod Worker Ollama",
+  "description": "RunPod Serverless Ollama worker for the Redbus Agent ecosystem — native /api/chat with tools support",
   "type": "serverless",
   "category": "language",
   "iconUrl": "https://ollama.com/public/ollama.png",
