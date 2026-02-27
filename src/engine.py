@@ -55,7 +55,8 @@ class OllamaNativeEngine:
     """
 
     SUPPORTED_METHODS = {"/api/chat", "/api/generate", "/api/tags", "health"}
-    TIMEOUT_SECONDS = 300  # 5 min — matches RunPod /runsync max
+    # D5: Configurable timeout via env var (default 300s = 5 min)
+    TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT", "300"))
 
     def __init__(self):
         logger.info("OllamaNativeEngine initialized")
@@ -76,7 +77,7 @@ class OllamaNativeEngine:
             return
 
         if method not in self.SUPPORTED_METHODS:
-            yield {"error": f"Unsupported method: {method}. Supported: {', '.join(self.SUPPORTED_METHODS)}"}
+            yield self._error("UNSUPPORTED_METHOD", f"Unsupported method: {method}. Supported: {', '.join(self.SUPPORTED_METHODS)}")
             return
 
         # /api/tags is a GET — just proxy it
@@ -86,7 +87,7 @@ class OllamaNativeEngine:
                 resp.raise_for_status()
                 yield resp.json()
             except Exception as e:
-                yield {"error": f"Ollama {method} failed: {str(e)}"}
+                yield self._error("OLLAMA_TAGS_FAILED", f"Ollama {method} failed: {str(e)}")
             return
 
         # ── /api/chat or /api/generate ──
@@ -119,13 +120,23 @@ class OllamaNativeEngine:
             yield result
         except requests.exceptions.Timeout:
             logger.error("[%s] Timeout after %ds on %s", job_id, self.TIMEOUT_SECONDS, method)
-            yield {"error": f"Ollama {method} timed out after {self.TIMEOUT_SECONDS}s"}
+            yield self._error("TIMEOUT", f"Ollama {method} timed out after {self.TIMEOUT_SECONDS}s",
+                              {"method": method, "timeout_seconds": self.TIMEOUT_SECONDS})
         except requests.exceptions.ConnectionError:
             logger.error("[%s] Cannot connect to Ollama at localhost:11434", job_id)
-            yield {"error": "Cannot connect to Ollama server at localhost:11434. Is it running?"}
+            yield self._error("CONNECTION_ERROR", "Cannot connect to Ollama server at localhost:11434. Is it running?")
         except Exception as e:
             logger.error("[%s] %s failed: %s", job_id, method, str(e))
-            yield {"error": f"Ollama {method} failed: {str(e)}"}
+            yield self._error("OLLAMA_ERROR", f"Ollama {method} failed: {str(e)}",
+                              {"method": method, "exception": type(e).__name__})
+
+    @staticmethod
+    def _error(code: str, message: str, details: dict = None) -> dict:
+        """C4: Structured error format for consistent error handling."""
+        err = {"error": message, "code": code}
+        if details:
+            err["details"] = details
+        return err
 
 
 # ─── Legacy OpenAI-compatible Engine ─────────────────────────────

@@ -39,6 +39,10 @@ ENV OLLAMA_KEEP_ALIVE="-1"
 ENV OLLAMA_NUM_GPU="999"
 # B3: Batch size for parallel token processing (tune per GPU/model)
 ENV OLLAMA_NUM_BATCH="512"
+# A4: Max parallel requests Ollama will handle (matches MAX_CONCURRENCY in handler)
+ENV OLLAMA_NUM_PARALLEL="1"
+# D5: Request timeout in seconds (used by OllamaNativeEngine)
+ENV OLLAMA_TIMEOUT="300"
 
 # ─── Install Python dependencies ─────────────────────────────────
 RUN pip install --no-cache-dir -r requirements.txt && chmod +x /work/start.sh

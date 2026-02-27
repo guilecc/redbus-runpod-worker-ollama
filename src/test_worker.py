@@ -181,6 +181,7 @@ class TestOllamaNativeEngine(unittest.TestCase):
 
         self.assertIn("error", results[0])
         self.assertIn("Unsupported method", results[0]["error"])
+        self.assertEqual(results[0]["code"], "UNSUPPORTED_METHOD")
 
     @patch("engine.requests")
     def test_connection_error(self, mock_requests):
@@ -196,6 +197,7 @@ class TestOllamaNativeEngine(unittest.TestCase):
 
         self.assertIn("error", results[0])
         self.assertIn("Cannot connect", results[0]["error"])
+        self.assertEqual(results[0]["code"], "CONNECTION_ERROR")
 
     @patch("engine.requests")
     def test_timeout_error(self, mock_requests):
@@ -211,6 +213,9 @@ class TestOllamaNativeEngine(unittest.TestCase):
 
         self.assertIn("error", results[0])
         self.assertIn("timed out", results[0]["error"])
+        self.assertEqual(results[0]["code"], "TIMEOUT")
+        self.assertIn("details", results[0])
+        self.assertEqual(results[0]["details"]["method"], "/api/chat")
 
     @patch("engine.requests")
     def test_tags_endpoint(self, mock_requests):
@@ -278,6 +283,39 @@ class TestOllamaNativeEngine(unittest.TestCase):
         # Should not raise — job_id parameter is accepted
         results = self._run(engine.generate(ji, job_id="test-job-123"))
         self.assertEqual(len(results), 1)
+
+
+# ─── P2: Structured Errors & Configurable Timeout ─────────────
+
+
+class TestStructuredErrors(unittest.TestCase):
+    """C4: Structured error format with code and optional details."""
+
+    def test_error_helper_basic(self):
+        from engine import OllamaNativeEngine
+        err = OllamaNativeEngine._error("TEST_CODE", "Something went wrong")
+        self.assertEqual(err["error"], "Something went wrong")
+        self.assertEqual(err["code"], "TEST_CODE")
+        self.assertNotIn("details", err)
+
+    def test_error_helper_with_details(self):
+        from engine import OllamaNativeEngine
+        err = OllamaNativeEngine._error("TIMEOUT", "Timed out", {"method": "/api/chat", "timeout_seconds": 300})
+        self.assertEqual(err["code"], "TIMEOUT")
+        self.assertEqual(err["details"]["method"], "/api/chat")
+        self.assertEqual(err["details"]["timeout_seconds"], 300)
+
+    @patch.dict(os.environ, {"OLLAMA_TIMEOUT": "60"})
+    def test_configurable_timeout(self):
+        """D5: OLLAMA_TIMEOUT env var is respected."""
+        # Need to reimport to pick up env var
+        import importlib
+        import engine
+        importlib.reload(engine)
+        e = engine.OllamaNativeEngine()
+        self.assertEqual(e.TIMEOUT_SECONDS, 60)
+        # Reset
+        importlib.reload(engine)
 
 
 # ─── Singleton Engines (D4) ────────────────────────────────────

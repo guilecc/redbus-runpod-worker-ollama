@@ -1,5 +1,5 @@
-runpod
-python-dotenv
-openai
+runpod==1.8.1
+python-dotenv==1.2.1
+openai==2.24.0
 orjson==3.10.14
-requests
+requests==2.32.5
