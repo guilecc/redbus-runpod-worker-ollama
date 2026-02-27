@@ -1,40 +1,63 @@
 #!/bin/bash
+# ─── RunPod Ollama Worker — Startup Script ───────────────────────
+# 1. Kill stale processes
+# 2. Start Ollama server
+# 3. Wait for readiness (health-check loop)
+# 4. Pull model if needed
+# 5. Preload model into VRAM (warm start)
+# 6. Launch RunPod handler
+
+set -euo pipefail
 
 cleanup() {
-    echo "Cleaning up..."
-    pkill -P $$ # Kill all child processes of the current script
+    echo "⏹  Cleaning up..."
+    pkill -P $$ 2>/dev/null || true
     exit 0
 }
 
-# Trap exit signals and call the cleanup function
 trap cleanup SIGINT SIGTERM
 
-# Kill any existing ollama processes
-pgrep ollama | xargs kill
+# ─── 1. Kill stale Ollama processes ──────────────────────────────
+pgrep ollama | xargs kill 2>/dev/null || true
 
-# Start the ollama server and log its output
-ollama serve 2>&1 | tee ollama.server.log &
-OLLAMA_PID=$! # Store the process ID (PID) of the background command
+# ─── 2. Start Ollama server ─────────────────────────────────────
+echo "🚀 Starting Ollama server..."
+ollama serve 2>&1 | tee /tmp/ollama.server.log &
+OLLAMA_PID=$!
 
-check_server_is_running() {
-    echo "Checking if server is running..."
-    if cat ollama.server.log | grep -q "Listening"; then
-        return 0 # Success
-    else
-        return 1 # Failure
+# ─── 3. Wait for readiness (A3: curl health check) ──────────────
+MAX_RETRIES=60
+RETRY_INTERVAL=2
+echo "⏳ Waiting for Ollama to be ready..."
+
+for i in $(seq 1 $MAX_RETRIES); do
+    if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+        echo "✅ Ollama is ready (attempt $i)"
+        break
     fi
-}
-
-# Wait for the server to start
-while ! check_server_is_running; do
-    sleep 5
+    if [ $i -eq $MAX_RETRIES ]; then
+        echo "❌ Ollama failed to start after $((MAX_RETRIES * RETRY_INTERVAL))s"
+        cat /tmp/ollama.server.log
+        exit 1
+    fi
+    sleep $RETRY_INTERVAL
 done
-# IF $MODEL_NAME is set, make sure to pull the model, else just skip
-if [ -z "$OLLAMA_MODEL_NAME" ]; then
-    echo "No model name provided. Skipping model pull..."
+
+# ─── 4. Pull model if OLLAMA_MODEL_NAME is set ──────────────────
+if [ -z "${OLLAMA_MODEL_NAME:-}" ]; then
+    echo "ℹ️  No OLLAMA_MODEL_NAME set. Skipping model pull."
 else
-    echo "Pulling model $OLLAMA_MODEL_NAME..."
-    ollama pull $OLLAMA_MODEL_NAME
+    echo "📦 Pulling model: $OLLAMA_MODEL_NAME..."
+    ollama pull "$OLLAMA_MODEL_NAME"
+
+    # ─── 5. Preload model into VRAM (A1: warm start) ─────────────
+    echo "🔥 Preloading $OLLAMA_MODEL_NAME into VRAM..."
+    curl -sf http://localhost:11434/api/generate \
+        -d "{\"model\": \"$OLLAMA_MODEL_NAME\", \"prompt\": \"\", \"stream\": false}" \
+        > /dev/null 2>&1 || echo "⚠️  Preload request failed (non-fatal)"
+    echo "✅ Model $OLLAMA_MODEL_NAME loaded into VRAM"
 fi
 
-python -u handler.py $1
+# ─── 6. Launch RunPod handler ────────────────────────────────────
+echo "🎯 Starting RunPod handler..."
+python -u handler.py "$@"
