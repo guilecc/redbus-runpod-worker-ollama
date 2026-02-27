@@ -37,6 +37,8 @@ ENV OLLAMA_MODELS="/runpod-volume"
 ENV OLLAMA_KEEP_ALIVE="-1"
 # Force full GPU offload
 ENV OLLAMA_NUM_GPU="999"
+# B3: Batch size for parallel token processing (tune per GPU/model)
+ENV OLLAMA_NUM_BATCH="512"
 
 # ─── Install Python dependencies ─────────────────────────────────
 RUN pip install --no-cache-dir -r requirements.txt && chmod +x /work/start.sh

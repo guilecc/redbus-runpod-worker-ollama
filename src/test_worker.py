@@ -1,14 +1,18 @@
 """
 Unit tests for the RunPod Ollama worker.
-Covers: JobInput parsing, OllamaNativeEngine, handler routing.
+Covers: JobInput parsing, OllamaNativeEngine, handler routing, health check.
 """
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import unittest
 from unittest.mock import patch, MagicMock
+
+# Suppress noisy logs during tests
+logging.disable(logging.CRITICAL)
 
 # Ensure src/ is on path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -224,6 +228,81 @@ class TestOllamaNativeEngine(unittest.TestCase):
 
         self.assertEqual(results[0]["models"][0]["name"], "gemma3:27b")
         mock_requests.get.assert_called_once()
+
+    @patch("engine.requests")
+    def test_health_check_ok(self, mock_requests):
+        """D1: Health check returns ok when Ollama is reachable."""
+        from engine import OllamaNativeEngine
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_requests.get.return_value = mock_resp
+        mock_requests.exceptions = __import__("requests").exceptions
+
+        engine = OllamaNativeEngine()
+        ji = JobInput({"method": "health", "data": {}})
+        results = self._run(engine.generate(ji))
+
+        self.assertEqual(results[0]["status"], "ok")
+        self.assertEqual(results[0]["ollama"], "reachable")
+
+    @patch("engine.requests")
+    def test_health_check_degraded(self, mock_requests):
+        """D1: Health check returns degraded when Ollama unreachable."""
+        import requests as real_requests
+        from engine import OllamaNativeEngine
+
+        mock_requests.get.side_effect = real_requests.exceptions.ConnectionError("refused")
+        mock_requests.exceptions = real_requests.exceptions
+
+        engine = OllamaNativeEngine()
+        ji = JobInput({"method": "health", "data": {}})
+        results = self._run(engine.generate(ji))
+
+        self.assertEqual(results[0]["status"], "degraded")
+        self.assertEqual(results[0]["ollama"], "unreachable")
+
+    @patch("engine.requests")
+    def test_job_id_passed_through(self, mock_requests):
+        """C6: job_id is accepted by generate()."""
+        from engine import OllamaNativeEngine
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"model": "test", "message": {"role": "assistant", "content": "hi"}, "done": True}
+        mock_resp.raise_for_status = MagicMock()
+        mock_requests.post.return_value = mock_resp
+        mock_requests.exceptions = __import__("requests").exceptions
+
+        engine = OllamaNativeEngine()
+        ji = JobInput({"method": "/api/chat", "data": {"model": "test", "messages": []}})
+        # Should not raise — job_id parameter is accepted
+        results = self._run(engine.generate(ji, job_id="test-job-123"))
+        self.assertEqual(len(results), 1)
+
+
+# ─── Singleton Engines (D4) ────────────────────────────────────
+
+
+class TestSingletonEngines(unittest.TestCase):
+    """D4: Engine instances are reused across calls."""
+
+    def test_native_engine_singleton(self):
+        from engine import get_native_engine
+        e1 = get_native_engine()
+        e2 = get_native_engine()
+        self.assertIs(e1, e2)
+
+    def test_openai_engine_singleton(self):
+        from engine import get_openai_engine
+        e1 = get_openai_engine()
+        e2 = get_openai_engine()
+        self.assertIs(e1, e2)
+
+    def test_legacy_engine_singleton(self):
+        from engine import get_legacy_engine
+        e1 = get_legacy_engine()
+        e2 = get_legacy_engine()
+        self.assertIs(e1, e2)
 
 
 # ─── Handler Routing ────────────────────────────────────────────

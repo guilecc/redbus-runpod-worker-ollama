@@ -1,10 +1,13 @@
 import json
+import logging
 import os
 
 import requests
 from dotenv import load_dotenv
 from openai import OpenAI
 from utils import JobInput
+
+logger = logging.getLogger("worker.engine")
 
 OLLAMA_BASE = "http://localhost:11434"
 
@@ -14,6 +17,32 @@ client = OpenAI(
     api_key="ollama",
 )
 
+# ─── Singleton engines (D4) ──────────────────────────────────────
+_native_engine = None
+_openai_engine = None
+_legacy_engine = None
+
+
+def get_native_engine():
+    global _native_engine
+    if _native_engine is None:
+        _native_engine = OllamaNativeEngine()
+    return _native_engine
+
+
+def get_openai_engine():
+    global _openai_engine
+    if _openai_engine is None:
+        _openai_engine = OllamaOpenAiEngine()
+    return _openai_engine
+
+
+def get_legacy_engine():
+    global _legacy_engine
+    if _legacy_engine is None:
+        _legacy_engine = OllamaEngine()
+    return _legacy_engine
+
 
 # ─── Native Ollama Engine ────────────────────────────────────────
 # Calls Ollama's native HTTP API directly (e.g. /api/chat, /api/generate).
@@ -22,18 +51,29 @@ client = OpenAI(
 class OllamaNativeEngine:
     """
     Forwards the raw Ollama payload to the local Ollama server.
-    Supports /api/chat and /api/generate with full tool_calls passthrough.
+    Supports /api/chat, /api/generate, /api/tags, and health checks.
     """
 
-    SUPPORTED_METHODS = {"/api/chat", "/api/generate", "/api/tags"}
+    SUPPORTED_METHODS = {"/api/chat", "/api/generate", "/api/tags", "health"}
     TIMEOUT_SECONDS = 300  # 5 min — matches RunPod /runsync max
 
     def __init__(self):
-        print("OllamaNativeEngine initialized")
+        logger.info("OllamaNativeEngine initialized")
 
-    async def generate(self, job_input: JobInput):
+    async def generate(self, job_input: JobInput, job_id: str = "unknown"):
         method = job_input.method
         data = job_input.data or {}
+
+        # ── D1: Health check — fast path ──
+        if method == "health":
+            model = os.getenv("OLLAMA_MODEL_NAME", "unknown")
+            try:
+                resp = requests.get(f"{OLLAMA_BASE}/api/tags", timeout=10)
+                resp.raise_for_status()
+                yield {"status": "ok", "model": model, "ollama": "reachable"}
+            except Exception:
+                yield {"status": "degraded", "model": model, "ollama": "unreachable"}
+            return
 
         if method not in self.SUPPORTED_METHODS:
             yield {"error": f"Unsupported method: {method}. Supported: {', '.join(self.SUPPORTED_METHODS)}"}
@@ -58,9 +98,10 @@ class OllamaNativeEngine:
         data["stream"] = False
 
         url = f"{OLLAMA_BASE}{method}"
-        print(f"  🔗 [native] POST {url} — model: {data.get('model')}, "
-              f"messages: {len(data.get('messages', []))}, "
-              f"tools: {len(data.get('tools', []))}")
+        logger.info("[%s] POST %s — model: %s, messages: %d, tools: %d",
+                     job_id, url, data.get("model"),
+                     len(data.get("messages", [])),
+                     len(data.get("tools", [])))
 
         try:
             resp = requests.post(
@@ -71,14 +112,19 @@ class OllamaNativeEngine:
             )
             resp.raise_for_status()
             result = resp.json()
-            print(f"  🔗 [native] Response: {len(result.get('message', {}).get('content', ''))} chars, "
-                  f"tool_calls: {len(result.get('message', {}).get('tool_calls', []))}")
+            logger.info("[%s] Response: %d chars, tool_calls: %d",
+                         job_id,
+                         len(result.get("message", {}).get("content", "")),
+                         len(result.get("message", {}).get("tool_calls", [])))
             yield result
         except requests.exceptions.Timeout:
+            logger.error("[%s] Timeout after %ds on %s", job_id, self.TIMEOUT_SECONDS, method)
             yield {"error": f"Ollama {method} timed out after {self.TIMEOUT_SECONDS}s"}
         except requests.exceptions.ConnectionError:
+            logger.error("[%s] Cannot connect to Ollama at localhost:11434", job_id)
             yield {"error": "Cannot connect to Ollama server at localhost:11434. Is it running?"}
         except Exception as e:
+            logger.error("[%s] %s failed: %s", job_id, method, str(e))
             yield {"error": f"Ollama {method} failed: {str(e)}"}
 
 
@@ -87,9 +133,9 @@ class OllamaNativeEngine:
 class OllamaEngine:
     def __init__(self):
         load_dotenv()
-        print("OllamaEngine initialized")
+        logger.info("OllamaEngine initialized")
 
-    async def generate(self, job_input):
+    async def generate(self, job_input, job_id: str = "unknown"):
         model = os.getenv("OLLAMA_MODEL_NAME", "llama3.2:1b")
 
         if isinstance(job_input.llm_input, str):
@@ -111,17 +157,17 @@ class OllamaEngine:
                 },
             })
 
-        openAIEngine = OllamaOpenAiEngine()
-        async for batch in openAIEngine.generate(openAiJob):
+        openAIEngine = get_openai_engine()
+        async for batch in openAIEngine.generate(openAiJob, job_id=job_id):
             yield batch
 
 
 class OllamaOpenAiEngine(OllamaEngine):
     def __init__(self):
         load_dotenv()
-        print("OllamaOpenAiEngine initialized")
+        logger.info("OllamaOpenAiEngine initialized")
 
-    async def generate(self, job_input):
+    async def generate(self, job_input, job_id: str = "unknown"):
         openai_input = job_input.openai_input
 
         if job_input.openai_route == "/v1/models":
